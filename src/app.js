@@ -55,7 +55,7 @@ function notify(signal) {
   if (signal.source !== 'live') return;
   if (notificationsEnabled && 'Notification' in window && Notification.permission === 'granted') {
     try {
-      const label = signal.type === 'early' ? 'Early reversal warning' : 'EMA20/200 crossover';
+      const label = signal.type === 'early' ? 'Early reversal warning' : `EMA ${signal.pair} crossover`;
       const notification = new Notification(`${signal.side.toUpperCase()} · ${signal.symbol}`, {
         body: `${label} on ${signal.exchange.toUpperCase()} · ${signal.timeframe} · RVOL ${signal.rvol.toFixed(1)}x`,
         tag: signal.id

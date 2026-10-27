@@ -1,4 +1,4 @@
-const DEFAULT_FILTERS = Object.freeze({ exchange: 'all', timeframe: 'all', side: 'all', type: 'all', search: '', sort: 'newest' });
+const DEFAULT_FILTERS = Object.freeze({ exchange: 'all', timeframe: 'all', side: 'all', type: 'all', pair: 'all', search: '', sort: 'newest' });
 const EXCHANGE_LABELS = { binance: 'Binance Futures', bybit: 'Bybit Linear', okx: 'OKX SWAP' };
 
 export const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -18,14 +18,18 @@ export function filterAndSortSignals(signals = [], filters = {}) {
     (selected.timeframe === 'all' || s.timeframe === selected.timeframe) &&
     (selected.side === 'all' || s.side === selected.side) &&
     (selected.type === 'all' || s.type === selected.type) &&
-    (!query || `${s.symbol} ${s.exchange}`.toLowerCase().includes(query)))
-    .sort((a, b) => selected.sort === 'volume' ? (b.rvol - a.rvol) || (b.time - a.time) : b.time - a.time);
+    (selected.pair === 'all' || s.pair === selected.pair) &&
+    (!query || `${s.symbol} ${s.exchange} ${s.pair ?? ''}`.toLowerCase().includes(query)))
+    .sort((a, b) => selected.sort === 'volume' ? (b.rvol - a.rvol) || ((b.detectedAt ?? b.time) - (a.detectedAt ?? a.time))
+      : ((b.detectedAt ?? b.time) - (a.detectedAt ?? a.time)) || b.time - a.time);
 }
 
 export function serializeSignalsCSV(signals = []) {
   const columns = [
     ['Exchange', s => s.exchange], ['Symbol', s => s.symbol], ['Timeframe', s => s.timeframe],
-    ['Direction', s => s.side], ['Signal', s => s.type], ['Candle Time (UTC)', s => new Date(s.time).toISOString()],
+    ['Direction', s => s.side], ['Signal', s => s.type], ['EMA Pair', s => s.pair || ''],
+    ['Candles Ago at Detection', s => s.type === 'confirmed' ? s.candlesAgo : ''],
+    ['Detected Candle Time (UTC)', s => new Date(s.detectedAt ?? s.time).toISOString()],
     ['Origin Time (UTC)', s => new Date(s.originTime).toISOString()], ['Price', s => s.price],
     ['RSI', s => s.rsi], ['MACD Z', s => s.macdZ], ['RVOL', s => s.rvol], ['Source', s => s.source]
   ];
@@ -70,29 +74,30 @@ function skeleton() {
         <header class="topbar"><div class="breadcrumbs">DASHBOARD <span>/</span> PERPETUAL FUTURES</div><div class="topbar-right"><span class="mode-chip">◈ FREE / NO API KEY</span><span id="local-clock" class="clock"></span></div></header>
         <section class="hero">
           <div class="hero-copy"><div class="eyebrow"><span class="eyebrow-pulse"></span> REAL-TIME SIGNAL DISCOVERY</div><h1>Spot the shift<span class="period">.</span><br/><span class="hero-muted">Before the crowd.</span></h1>
-            <p>Multi-exchange perpetual futures scanner for early exhaustion warnings and EMA20 / EMA200 trend-cross confirmations.</p>
+            <p>Multi-exchange perpetual futures scanner for early exhaustion warnings and confirmed EMA 20/200, 10/200 and 10/100 crossovers.</p>
             <div class="hero-actions"><button id="scan-toggle" class="primary-button" type="button">▶ &nbsp; Start scanning</button><button id="notify-toggle" class="ghost-button" type="button">♧ &nbsp; Enable alerts</button><button id="sound-toggle" class="icon-button" type="button" title="Toggle alert sound" aria-label="Toggle alert sound">♫</button></div>
           </div><div class="hero-art" aria-hidden="true"><div class="grid-plane"></div><div class="halo halo-one"></div><div class="halo halo-two"></div><svg class="hero-graph" viewBox="0 0 430 240" fill="none"><path d="M0 164 L39 151 L66 169 L94 120 L125 139 L160 123 L181 153 L205 95 L246 121 L271 72 L305 94 L330 58 L357 82 L388 35 L430 12" stroke="#41f5c8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 164 L39 151 L66 169 L94 120 L125 139 L160 123 L181 153 L205 95 L246 121 L271 72 L305 94 L330 58 L357 82 L388 35 L430 12 V240 H0Z" fill="url(#line-gradient)"/><defs><linearGradient id="line-gradient" x1="0" y1="30" x2="0" y2="240"><stop stop-color="#41f5c8" stop-opacity=".25"/><stop offset="1" stop-color="#41f5c8" stop-opacity="0"/></linearGradient></defs><circle cx="388" cy="35" r="6" fill="#41f5c8"/><circle cx="388" cy="35" r="14" stroke="#41f5c8" stroke-opacity=".5"/></svg><div class="art-label">EMA 20 <span>↗</span> EMA 200</div></div>
         </section>
         <section class="section-stat"><div class="section-title"><span class="section-accent"></span> LIVE MARKET COVERAGE</div><div id="scan-status" class="scan-status">● STANDBY</div></section>
         <section class="metrics"><div class="metric-card"><div class="metric-label">ELIGIBLE CONTRACTS <span class="metric-glyph">◉</span></div><div id="metric-eligible" class="metric-value">0</div><div class="metric-sub">Filtered by 24h turnover</div></div><div class="metric-card"><div class="metric-label">INITIALIZED <span class="metric-glyph">↗</span></div><div id="metric-ready" class="metric-value">0</div><div class="metric-progress"><span id="coverage-progress"></span></div></div><div class="metric-card"><div class="metric-label">IN QUEUE <span class="metric-glyph">◷</span></div><div id="metric-queued" class="metric-value">0</div><div class="metric-sub">Progressive, rate-limited</div></div><div class="metric-card"><div class="metric-label">FAILED / STALE <span class="metric-glyph">⚠</span></div><div id="metric-issues" class="metric-value">0 <small>/ 0</small></div><div class="metric-sub">No stale-feed alerts</div></div></section>
         <section class="signal-overview"><div class="overview-title">SIGNAL ACTIVITY <span class="overview-sub">Session discoveries · newest first</span></div><div id="signal-counters" class="signal-counters"></div></section>
-        <section class="results-card"><div class="results-header"><div><div class="section-title"><span class="section-accent"></span> SIGNAL FEED <span id="match-count" class="result-count">0</span></div><div class="results-desc">Closed-candle signals only · Research candidates, not entries</div></div><div class="results-actions"><button id="export-button" class="outline-button" type="button">⇩ &nbsp; Export CSV</button></div></div>
+        <section class="results-card"><div class="results-header"><div><div class="section-title"><span class="section-accent"></span> SIGNAL FEED <span id="match-count" class="result-count">0</span></div><div class="results-desc">Closed-candle signals only · Cross age is recorded at discovery · Session history retained</div></div><div class="results-actions"><button id="export-button" class="outline-button" type="button">⇩ &nbsp; Export CSV</button></div></div>
           <div class="filter-bar"><div class="search-wrap"><span>⌕</span><input id="signal-search" data-filter="search" type="search" placeholder="Search contracts..." aria-label="Search contracts" /></div>
             <select data-filter="exchange" aria-label="Exchange"><option value="all">All exchanges</option><option value="binance">Binance</option><option value="bybit">Bybit</option><option value="okx">OKX</option></select>
             <select data-filter="timeframe" aria-label="Timeframe"><option value="all">All intervals</option><option value="1m">1 minute</option><option value="5m">5 minutes</option><option value="15m">15 minutes</option></select>
             <select data-filter="side" aria-label="Direction"><option value="all">Long + short</option><option value="long">Long only</option><option value="short">Short only</option></select>
             <select data-filter="type" aria-label="Signal type"><option value="all">Both signal types</option><option value="early">Early warning</option><option value="confirmed">EMA confirmed</option></select>
+            <select data-filter="pair" aria-label="EMA pair"><option value="all">All EMA pairs</option><option value="20/200">EMA 20/200</option><option value="10/200">EMA 10/200</option><option value="10/100">EMA 10/100</option></select>
             <select data-filter="sort" aria-label="Sort by"><option value="newest">Newest first</option><option value="volume">Highest RVOL</option></select>
           </div>
-          <div class="table-scroll"><table class="signals-table"><thead><tr><th>CONTRACT</th><th>EXCHANGE</th><th>INTERVAL</th><th>DIRECTION</th><th>SIGNAL</th><th>PRICE</th><th>RSI 14</th><th>MACD Z</th><th>RVOL</th><th>TIME</th><th>CHART</th></tr></thead><tbody id="signals-body"></tbody></table></div>
+          <div class="table-scroll"><table class="signals-table"><thead><tr><th>CONTRACT</th><th>EXCHANGE</th><th>INTERVAL</th><th>DIRECTION</th><th>SIGNAL</th><th>EMA PAIR</th><th title="Completed candles between the crossover and its discovery">BARS AGO AT FIND</th><th>PRICE</th><th>RSI 14</th><th>MACD Z</th><th>RVOL</th><th title="Time of the actual crossover or early-warning candle">CROSS TIME</th><th>CHART</th></tr></thead><tbody id="signals-body"></tbody></table></div>
           <div id="empty-message" class="empty-message"></div><div class="results-footer"><span id="results-summary">Waiting for scan</span><span>DATA: EXCHANGE PUBLIC MARKET FEEDS</span></div>
         </section>
         <details class="settings-panel"><summary><div><span class="section-accent"></span> SCANNER PARAMETERS <span class="settings-hint">Tune volume and oscillator thresholds</span></div><span class="settings-chevron">⌄</span></summary>
-          <div class="settings-grid"><label>Min 24h turnover (USDT)<input type="number" data-setting="minTurnover" min="0" step="1000000" /></label><label>Early RSI oversold<input type="number" data-setting="rsiOversold" min="1" max="50" /></label><label>Early RSI overbought<input type="number" data-setting="rsiOverbought" min="50" max="99" /></label><label>MACD histogram |Z|<input type="number" data-setting="macdExtreme" min="0" max="10" step="0.1" /></label><label>Early minimum RVOL<input type="number" data-setting="earlyRvol" min="0" max="50" step="0.1" /></label><label>Confirm minimum RVOL<input type="number" data-setting="confirmRvol" min="0" max="50" step="0.1" /></label><label>Extreme lookback (bars)<input type="number" data-setting="extremeWindow" min="1" max="25" step="1" /></label><label>EMA-cross lookback (bars)<input type="number" data-setting="crossLookback" min="1" max="15" step="1" /></label></div>
-          <p class="setting-note">Changing the turnover cutoff restarts market discovery. Thresholds are hypotheses to test, not proven predictive levels. EMA20/200, MACD(12,26,9), and RSI14 are fixed.</p>
+          <div class="settings-grid"><label>Min 24h turnover (USDT)<input type="number" data-setting="minTurnover" min="0" step="1000000" /></label><label>Early RSI oversold<input type="number" data-setting="rsiOversold" min="1" max="50" /></label><label>Early RSI overbought<input type="number" data-setting="rsiOverbought" min="50" max="99" /></label><label>MACD histogram |Z|<input type="number" data-setting="macdExtreme" min="0" max="10" step="0.1" /></label><label>Early minimum RVOL<input type="number" data-setting="earlyRvol" min="0" max="50" step="0.1" /></label><label>Confirm minimum RVOL<input type="number" data-setting="confirmRvol" min="0" max="50" step="0.1" /></label><label>Extreme lookback (bars)<input type="number" data-setting="extremeWindow" min="1" max="25" step="1" /></label><label>Max EMA-cross age (0 to N bars ago)<input type="number" data-setting="crossLookback" min="0" max="15" step="1" /></label></div>
+          <p class="setting-note">Changing the turnover cutoff restarts market discovery. EMA 20/200, 10/200 and 10/100 crosses must meet RSI / MACD / crossing-candle RVOL confirmation. A crossover up to 4 closed candles old is detected by default. Early warnings still use EMA 20/200.</p>
         </details>
-        <footer class="footer"><span>PERPPULSE / VERSION 1.0</span><span>BUILT FOR THE OPEN WEB · FREE FOREVER TO HOST</span></footer>
+        <footer class="footer"><span>PERPPULSE / VERSION 2.0</span><span>BUILT FOR THE OPEN WEB · FREE FOREVER TO HOST</span></footer>
       </main>
     </div>`;
 }
@@ -112,6 +117,8 @@ function rowsMarkup(signals) {
     <td><span class="timeframe-chip">${escapeHTML(s.timeframe)}</span></td>
     <td>${pill(s.side === 'long' ? 'long' : 'short', s.side === 'long' ? '↗ LONG' : '↘ SHORT')}</td>
     <td>${pill(s.type === 'confirmed' ? 'confirmed' : 'early', s.type === 'confirmed' ? '◉ EMA CROSS' : '◌ EARLY WARN')}</td>
+    <td><span class="pair-chip">${escapeHTML(s.pair || '—')}</span></td>
+    <td class="numeric">${s.type === 'confirmed' ? number(s.candlesAgo, 0) : '—'}</td>
     <td class="numeric price-cell">${price(s.price)}</td><td class="numeric">${number(s.rsi, 1)}</td>
     <td class="numeric ${s.macdZ < 0 ? 'negative' : 'positive'}">${number(s.macdZ, 2)}</td>
     <td class="numeric rvol-cell">${number(s.rvol, 2)}×</td><td class="date-cell">${timeLabel(s.time)}</td>

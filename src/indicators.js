@@ -1,11 +1,9 @@
 export function computeIndicators(candles, settings = {}) {
-  const fastPeriod = settings.emaFast ?? 20;
-  const slowPeriod = settings.emaSlow ?? 200;
   const rsiPeriod = settings.rsiPeriod ?? 14;
   const volumeWindow = settings.volumeWindow ?? 20;
   const zWindow = settings.zWindow ?? 100;
   const rows = [];
-  let emaFast, emaSlow, macdFast, macdSlow, macdSignal;
+  let ema10, ema20, ema100, ema200, macdFast, macdSlow, macdSignal;
   let avgGain = 0, avgLoss = 0;
   const histValues = [];
   const volumes = [];
@@ -15,8 +13,10 @@ export function computeIndicators(candles, settings = {}) {
     const close = Number(bar.close);
     const volume = Number(bar.volume);
     const ema = (value, previous, period) => previous === undefined ? value : previous + (2 / (period + 1)) * (value - previous);
-    emaFast = ema(close, emaFast, fastPeriod);
-    emaSlow = ema(close, emaSlow, slowPeriod);
+    ema10 = ema(close, ema10, 10);
+    ema20 = ema(close, ema20, 20);
+    ema100 = ema(close, ema100, 100);
+    ema200 = ema(close, ema200, 200);
     macdFast = ema(close, macdFast, 12);
     macdSlow = ema(close, macdSlow, 26);
     const macd = macdFast - macdSlow;
@@ -63,8 +63,10 @@ export function computeIndicators(candles, settings = {}) {
 
     rows.push({
       time: bar.time, close,
-      ema20: i >= fastPeriod - 1 ? emaFast : NaN,
-      ema200: i >= slowPeriod - 1 ? emaSlow : NaN,
+      ema10: i >= 9 ? ema10 : NaN,
+      ema20: i >= 19 ? ema20 : NaN,
+      ema100: i >= 99 ? ema100 : NaN,
+      ema200: i >= 199 ? ema200 : NaN,
       rsi, macd, macdSignal,
       hist: i >= 34 ? hist : NaN,
       macdZ,

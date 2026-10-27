@@ -122,6 +122,7 @@ h1 { font: 700 clamp(29px,3.3vw,49px)/1.04 'Space Grotesk',sans-serif; letter-sp
 .ticker-sub { color: #678987; font-size: 8px; letter-spacing: .06em; }
 .exchange-text { color: #a3b6b6; }
 .timeframe-chip { border: 1px solid #355358; padding: 4px 7px; border-radius: 5px; color: #b5d4d3; }
+.pair-chip { color: #84ddca; font-weight: 700; letter-spacing: .04em; }
 .pill { display: inline-block; border-radius: 5px; padding: 5px 7px; font-size: 9px; font-weight: 800; letter-spacing: .03em; }
 .pill.long { color: #4eeab3; background: #204536; }
 .pill.short { color: #ff9fa3; background: #4b2d37; }

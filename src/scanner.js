@@ -274,6 +274,12 @@ export function createScanner({ adapters = [], settings = {}, onState = () => {}
   }
   function updateSettings(partial) {
     currentSettings = { ...currentSettings, ...partial };
+    // Re-evaluate existing closed history when criteria change. Otherwise a
+    // crossover from the last four candles may remain unseen until the next bar.
+    for (const record of records.values()) {
+      if (!record.ready || record.stale) continue;
+      for (const frame of FRAMES) evaluate(record, frame, 'snapshot');
+    }
     emit();
   }
   function stop() {
