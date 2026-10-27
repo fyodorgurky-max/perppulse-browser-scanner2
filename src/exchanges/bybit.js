@@ -1,7 +1,7 @@
 import { INTERVAL_MS, normalizeCandles, openSocketGroups, requestJSON, requireAPI } from './common.js';
 
 const BASE = 'https://api.bybit.com';
-const intervals = { '1m': '1', '5m': '5', '15m': '15' };
+const intervals = { '1m': '1', '5m': '5', '15m': '15', '1h': '60', '4h': '240' };
 
 export const bybit = {
   id: 'bybit',

@@ -1,6 +1,7 @@
 import { INTERVAL_MS, normalizeCandles, openSocketGroups, requestJSON, requireAPI } from './common.js';
 
 const BASE = 'https://www.okx.com';
+const intervals = { '1m': '1m', '5m': '5m', '15m': '15m', '1h': '1H', '4h': '4H' };
 export const okx = {
   id: 'okx',
   async listMarkets(fetchFn = fetch) {
@@ -20,7 +21,7 @@ export const okx = {
     let cursor = '';
     while (records.length < limit) {
       const batchLimit = Math.min(300, limit - records.length);
-      const url = `${BASE}/api/v5/market/candles?instId=${encodeURIComponent(symbol)}&bar=${timeframe}&limit=${batchLimit}${cursor ? `&after=${cursor}` : ''}`;
+      const url = `${BASE}/api/v5/market/candles?instId=${encodeURIComponent(symbol)}&bar=${intervals[timeframe]}&limit=${batchLimit}${cursor ? `&after=${cursor}` : ''}`;
       const data = requireAPI(await requestJSON(url, fetchFn), 'code', 0);
       const batch = data.data ?? [];
       if (!batch.length) break;

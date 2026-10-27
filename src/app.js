@@ -111,6 +111,8 @@ async function dispatch(action, payload) {
     updateAlertUI(root, { notifications: notificationsEnabled, sound: soundEnabled });
   } else if (action === 'export') {
     exportCSV(payload);
+  } else if (action === 'assess') {
+    scanner.assessSignal(payload);
   } else if (action === 'settings') {
     const minTurnoverChanged = payload.minTurnover !== undefined && payload.minTurnover !== settings.minTurnover;
     settings = { ...settings, ...payload };
@@ -125,3 +127,5 @@ async function dispatch(action, payload) {
 }
 
 newScanner();
+// An old closed-candle setup must visibly expire even if the scanner is paused.
+setInterval(() => draw(currentState), 30_000);

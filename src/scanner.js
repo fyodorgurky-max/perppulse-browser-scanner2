@@ -1,6 +1,7 @@
 import { computeIndicators } from './indicators.js';
 import { DEFAULT_SETTINGS, evaluateSignals } from './signals.js';
 import { INTERVAL_MS, normalizeCandles } from './exchanges/common.js';
+import { assessTradeSetup } from './trade-setup.js';
 
 const FRAMES = ['1m', '5m', '15m'];
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -32,7 +33,8 @@ export function buildHigherTimeframes(minutes, timeframe) {
 }
 
 export function createScanner({ adapters = [], settings = {}, onState = () => {}, onSignal = () => {},
-  fetchFn = fetch, wsFactory, delayMs = 120, nowFn = Date.now, feedIdleMs = 240_000 } = {}) {
+  fetchFn = fetch, wsFactory, delayMs = 120, nowFn = Date.now, feedIdleMs = 240_000,
+  assessmentDelayMs = 450, assessmentAutoLimit = 20 } = {}) {
   let currentSettings = { ...DEFAULT_SETTINGS, ...settings };
   const adapterById = new Map(adapters.map(adapter => [adapter.id, adapter]));
   const records = new Map();
@@ -43,6 +45,10 @@ export function createScanner({ adapters = [], settings = {}, onState = () => {}
   const pending = new Map();
   const timers = new Set();
   const repairs = new Set();
+  const assessmentQueue = [];
+  const assessmentTasks = new Set();
+  const contextCache = new Map();
+  let autoAssessed = 0, activeAssessments = 0;
   let healthTimer = null;
   let running = false, eligible = 0, ready = 0, failed = 0, stale = 0, queue = [], bootstrapPromise = Promise.resolve();
 
@@ -61,10 +67,96 @@ export function createScanner({ adapters = [], settings = {}, onState = () => {}
   function recordSignal(signal, source) {
     if (seenSignals.has(signal.id)) return;
     seenSignals.add(signal.id);
-    const enriched = { ...signal, source };
+    const enriched = { ...signal, source, tradeSetup: { status: 'unassessed', reason: 'Awaiting optional multi-timeframe analysis.' } };
     signals.unshift(enriched);
     if (signals.length > 1500) signals.pop();
     onSignal(enriched);
+    if (source === 'live' || autoAssessed < assessmentAutoLimit) {
+      autoAssessed++;
+      requestAssessment(enriched.id);
+    }
+  }
+  function getSignal(id) { return signals.find(signal => signal.id === id); }
+  async function loadAssessmentContext(record) {
+    const key = keyFor(record.market.exchange, record.market.symbol);
+    const cached = contextCache.get(key);
+    if (cached && nowFn() - cached.time < (cached.ttl ?? 15 * 60_000) &&
+        (!Number.isFinite(cached.validUntil) || nowFn() < cached.validUntil)) return cached.promise;
+    const adapter = adapterById.get(record.market.exchange);
+    const promise = (async () => {
+      const oneHour = await adapter.loadCandles(fetchFn, record.market.symbol, '1h', 150, nowFn());
+      const fourHours = await adapter.loadCandles(fetchFn, record.market.symbol, '4h', 150, nowFn());
+      for (const [frame, bars] of [['1h', oneHour], ['4h', fourHours]]) {
+        const interval = INTERVAL_MS[frame];
+        const mostRecentClose = bars.at(-1)?.time + interval;
+        const age = nowFn() - mostRecentClose;
+        if (!Number.isFinite(age) || bars.length < 60 || age > 2 * interval || age < -60_000) {
+          throw new Error(`${frame.toUpperCase()} context is missing, stale, or not yet closed.`);
+        }
+      }
+      return { '1h': oneHour, '4h': fourHours };
+    })();
+    contextCache.set(key, { time: nowFn(), promise, ttl: 15 * 60_000 });
+    try {
+      const data = await promise;
+      const entry = contextCache.get(key);
+      if (entry?.promise === promise) {
+        const nextHourClose = data['1h'].at(-1).time + 2 * INTERVAL_MS['1h'];
+        const nextFourHourClose = data['4h'].at(-1).time + 2 * INTERVAL_MS['4h'];
+        entry.validUntil = Math.min(entry.time + 15 * 60_000,
+          Math.max(entry.time + 30_000, Math.min(nextHourClose, nextFourHourClose)));
+      }
+      return data;
+    }
+    catch (error) {
+      // Briefly cache failures as well, so ten EMA pairs don't hammer an
+      // unavailable provider with identical higher-timeframe requests.
+      const entry = contextCache.get(key);
+      if (entry?.promise === promise) { entry.time = nowFn(); entry.ttl = 60_000; }
+      throw error;
+    }
+  }
+  function pumpAssessments() {
+    while (running && activeAssessments < 1 && assessmentQueue.length) {
+      const id = assessmentQueue.shift();
+      activeAssessments++;
+      const operation = (async () => {
+        const signal = getSignal(id);
+        if (!signal) return;
+        try {
+          const record = records.get(keyFor(signal.exchange, signal.symbol));
+          if (!record?.ready || record.stale) throw new Error('Market history is not ready or is stale.');
+          if (assessmentDelayMs > 0) await wait(assessmentDelayMs);
+          const context = await loadAssessmentContext(record);
+          if (!running) return;
+          const current = records.get(keyFor(signal.exchange, signal.symbol));
+          if (!current?.ready || current.stale) throw new Error('Market history became stale.');
+          signal.tradeSetup = assessTradeSetup({
+            side: signal.side, asOf: nowFn(),
+            frames: { ...context, '15m': current.frames['15m'], '5m': current.frames['5m'] }
+          });
+        } catch (error) {
+          if (!running) return;
+          signal.tradeSetup = { status: 'unavailable', asOf: nowFn(), reason: `Context unavailable: ${error.message}` };
+        }
+        emit();
+      })();
+      assessmentTasks.add(operation);
+      operation.finally(() => {
+        assessmentTasks.delete(operation);
+        activeAssessments--;
+        if (running) pumpAssessments();
+      });
+    }
+  }
+  function requestAssessment(id) {
+    const signal = getSignal(id);
+    if (!signal || !running || signal.tradeSetup?.status === 'loading') return false;
+    signal.tradeSetup = { status: 'loading', reason: 'Retrieving 4H/1H context from the exchange…' };
+    assessmentQueue.push(id);
+    pumpAssessments();
+    emit();
+    return true;
   }
   function evaluate(record, timeframe, source) {
     const candles = record.frames[timeframe];
@@ -272,6 +364,9 @@ export function createScanner({ adapters = [], settings = {}, onState = () => {}
     await bootstrapPromise;
     while (repairs.size) await Promise.all([...repairs]);
   }
+  async function whenAssessmentsIdle() {
+    while (assessmentTasks.size) await Promise.all([...assessmentTasks]);
+  }
   function updateSettings(partial) {
     currentSettings = { ...currentSettings, ...partial };
     // Re-evaluate existing closed history when criteria change. Otherwise a
@@ -284,6 +379,8 @@ export function createScanner({ adapters = [], settings = {}, onState = () => {}
   }
   function stop() {
     running = false;
+    assessmentQueue.length = 0;
+    contextCache.clear();
     if (healthTimer) clearInterval(healthTimer);
     healthTimer = null;
     for (const group of streamGroups) group.close();
@@ -292,5 +389,6 @@ export function createScanner({ adapters = [], settings = {}, onState = () => {}
     for (const provider of Object.values(providers)) if (provider.status === 'live') provider.status = 'paused';
     emit();
   }
-  return { start, stop, whenIdle, snapshot, getCandles, updateSettings, checkFeedHealth };
+  return { start, stop, whenIdle, whenAssessmentsIdle, assessSignal: requestAssessment,
+    snapshot, getCandles, updateSettings, checkFeedHealth };
 }
